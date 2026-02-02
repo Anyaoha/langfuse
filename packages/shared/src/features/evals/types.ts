@@ -1,5 +1,17 @@
 import z from "zod/v4";
 
+export const EvalTargetObject = {
+  TRACE: "trace",
+  DATASET: "dataset",
+  EVENT: "event",
+  EXPERIMENT: "experiment",
+} as const;
+
+export type EvalTargetObject =
+  (typeof EvalTargetObject)[keyof typeof EvalTargetObject];
+
+export const EvalTargetObjectSchema = z.enum(Object.values(EvalTargetObject));
+
 export const langfuseObjects = [
   "trace",
   "span",
@@ -19,29 +31,40 @@ const langfuseObject = z.enum(langfuseObjects);
 export type LangfuseEvaluationObject = z.infer<typeof langfuseObject>;
 
 // variable mapping stored in the db for eval templates
+// langfuseObject is optional - it's only needed for trace/dataset targets
+// For observation-based evals (EVENT, EXPERIMENT), the observation is already selected
 export const variableMapping = z
   .object({
     templateVariable: z.string(), // variable name in the template
     // name of the observation to extract the variable from
     // not required for trace, as we only have one.
     objectName: z.string().nullish(),
-    langfuseObject: langfuseObject,
+    langfuseObject: langfuseObject.optional(),
     selectedColumnId: z.string(),
     jsonSelector: z.string().nullish(),
   })
   .refine(
-    (value) => value.langfuseObject === "trace" || value.objectName !== null,
+    (value) =>
+      // Only validate objectName if langfuseObject is provided and requires it
+      !value.langfuseObject ||
+      value.langfuseObject === "trace" ||
+      value.langfuseObject === "dataset_item" ||
+      value.objectName !== null,
     {
-      message: "objectName is required for langfuseObjects other than trace",
+      message:
+        "objectName is required when langfuseObject is an observation type",
     },
   );
 
 export const variableMappingList = z.array(variableMapping);
 
+// WIP version for forms - langfuseObject optional to support both:
+// - Trace/Dataset evals: Include langfuseObject and objectName to specify which observation
+// - Event/Experiment evals: Omit them since the observation is already selected
 export const wipVariableMapping = z.object({
   templateVariable: z.string(),
   objectName: z.string().nullish(),
-  langfuseObject: langfuseObject,
+  langfuseObject: langfuseObject.optional(),
   selectedColumnId: z.string().nullish(),
   jsonSelector: z.string().nullish(),
 });
@@ -157,3 +180,22 @@ export const JobTimeScopeZod = z.enum(["NEW", "EXISTING"]);
 export type JobTimeScope = z.infer<typeof JobTimeScopeZod>;
 
 export const TimeScopeSchema = z.array(JobTimeScopeZod).default(["NEW"]);
+
+// Simplified variable mapping for observation-based evals.
+// Unlike trace-based evals, we don't need objectName since we're directly
+// targeting a specific observation - no need to specify which observation to extract from.
+//
+// Note: selectedColumnId must be a valid column ID from observationEvalVariableColumns.
+// See packages/shared/src/features/evals/observationForEval.ts for the source of truth.
+export const observationVariableMapping = z.object({
+  templateVariable: z.string(), // variable name in the template
+  selectedColumnId: z.string(), // column to extract (must match observationEvalVariableColumns)
+  jsonSelector: z.string().nullish(), // optional JSON path selector
+});
+
+export const observationVariableMappingList = z.array(
+  observationVariableMapping,
+);
+export type ObservationVariableMapping = z.infer<
+  typeof observationVariableMapping
+>;

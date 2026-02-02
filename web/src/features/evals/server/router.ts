@@ -18,6 +18,7 @@ import {
   JobConfigState,
   orderBy,
   jsonSchema,
+  EvalTargetObject,
 } from "@langfuse/shared";
 import {
   getQueue,
@@ -30,7 +31,7 @@ import {
   orderByToPrismaSql,
   DefaultEvalModelService,
   testModelCall,
-  clearNoJobConfigsCache,
+  clearNoEvalConfigsCache,
 } from "@langfuse/shared/src/server";
 import { TRPCError } from "@trpc/server";
 import { EvalReferencedEvaluators } from "@/src/features/evals/types";
@@ -625,7 +626,12 @@ export const evalRouter = createTRPCRouter({
     }),
 
   jobConfigsByTarget: protectedProjectProcedure
-    .input(z.object({ projectId: z.string(), targetObject: z.string() }))
+    .input(
+      z.object({
+        projectId: z.string(),
+        targetObject: z.array(z.string()),
+      }),
+    )
     .query(async ({ input, ctx }) => {
       throwIfNoProjectAccess({
         session: ctx.session,
@@ -636,7 +642,7 @@ export const evalRouter = createTRPCRouter({
       const evaluators = await ctx.prisma.jobConfiguration.findMany({
         where: {
           projectId: input.projectId,
-          targetObject: input.targetObject,
+          targetObject: { in: input.targetObject },
         },
         include: {
           evalTemplate: true,
@@ -723,8 +729,9 @@ export const evalRouter = createTRPCRouter({
         },
       });
 
-      // Clear the "no job configs" cache since we just created a new job configuration
-      await clearNoJobConfigsCache(input.projectId);
+      // Clear the "no job configs" caches since we just created a new job configuration
+      await clearNoEvalConfigsCache(input.projectId, "traceBased");
+      await clearNoEvalConfigsCache(input.projectId, "eventBased");
 
       if (input.timeScope.includes("EXISTING")) {
         logger.info(
@@ -961,7 +968,7 @@ export const evalRouter = createTRPCRouter({
             projectId: projectId,
             evalTemplateId: evalTemplateId,
             status: oldStatus,
-            targetObject: "dataset",
+            targetObject: EvalTargetObject.DATASET,
           },
         });
 
@@ -1072,9 +1079,10 @@ export const evalRouter = createTRPCRouter({
         data: config,
       });
 
-      // Clear the "no job configs" cache if we're activating a job configuration
+      // Clear the "no job configs" caches if we're activating a job configuration
       if (config.status === "ACTIVE") {
-        await clearNoJobConfigsCache(projectId);
+        await clearNoEvalConfigsCache(projectId, "traceBased");
+        await clearNoEvalConfigsCache(projectId, "eventBased");
       }
 
       if (config.timeScope?.includes("EXISTING")) {
@@ -1152,6 +1160,11 @@ export const evalRouter = createTRPCRouter({
           projectId: projectId,
         },
       });
+
+      // Clear the "no job configs" caches to ensure they are re-evaluated
+      // This is conservative but ensures correctness after deletion
+      await clearNoEvalConfigsCache(projectId, "traceBased");
+      await clearNoEvalConfigsCache(projectId, "eventBased");
     }),
 
   // TODO: moved to LFE-4573
